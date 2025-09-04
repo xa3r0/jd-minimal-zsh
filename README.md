@@ -1,5 +1,11 @@
 # jd-minimal-zsh
 
+![License](https://img.shields.io/badge/license-MIT-green)
+![Shell](https://img.shields.io/badge/shell-zsh-blue)
+![Works on](https://img.shields.io/badge/platform-linux%20%7C%20macOS-lightgrey)
+
+
+
 A one-shot bootstrap that installs **Oh My Zsh**, enables two must-have plugins, and drops in a **minimal prompt theme**.
 
 ### Prompt preview
