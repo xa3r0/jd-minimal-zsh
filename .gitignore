@@ -1,0 +1,6 @@
+# Ignore OS cruft
+.DS_Store
+Thumbs.db
+
+# Ignore local zsh history
+.zsh_history
