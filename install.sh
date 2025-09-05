@@ -2,8 +2,9 @@
 set -e
 
 # jd-minimal-zsh bootstrap
-# - Installs zsh + OMZ + plugins + jd-minimal theme
-# - Detects or installs a Nerd Font unless disabled
+# - Installs OMZ + plugins + jd-minimal theme
+# - Handles Linux (apt/dnf/pacman) and macOS (Darwin)
+# - Installs Nerd Font to the correct per-OS path unless disabled
 
 # Flags
 NO_FONT=0
@@ -24,8 +25,16 @@ if [ "${JD_INSTALL_FONT:-1}" = "0" ]; then NO_FONT=1; fi
 
 echo "[*] jd-minimal-zsh installer starting..."
 
-# Detect package manager
-pkg_install() {
+# Detect OS
+OS="$(uname -s)"
+case "$OS" in
+  Linux)   PLATFORM="linux" ;;
+  Darwin)  PLATFORM="macos" ;;
+  *)       PLATFORM="other" ;;
+esac
+
+# Package install wrappers
+pkg_install_linux() {
   if command -v apt >/dev/null 2>&1; then
     sudo apt update -y
     sudo apt install -y "$@"
@@ -34,18 +43,38 @@ pkg_install() {
   elif command -v pacman >/dev/null 2>&1; then
     sudo pacman -Sy --noconfirm "$@"
   else
-    echo "[!] Unsupported distro. Please install: $*"
+    echo "[!] Unsupported Linux package manager. Please install: $*"
   fi
 }
 
-# Ensure core deps
-need_cmds=(zsh git curl)
-for c in "${need_cmds[@]}"; do
-  if ! command -v "$c" >/dev/null 2>&1; then
-    echo "[*] Installing missing dependency: $c"
-    pkg_install "$c"
+pkg_install_macos() {
+  if ! command -v brew >/dev/null 2>&1; then
+    echo "[!] Homebrew not found. Install from https://brew.sh then rerun this script."
+    return 1
   fi
-done
+  brew install "$@"
+}
+
+# Ensure core deps zsh + git + curl
+ensure_core_deps() {
+  missing=()
+  for c in zsh git curl; do
+    if ! command -v "$c" >/dev/null 2>&1; then
+      missing+=("$c")
+    fi
+  done
+  if [ "${#missing[@]}" -gt 0 ]; then
+    echo "[*] Installing missing deps: ${missing[*]}"
+    if [ "$PLATFORM" = "linux" ]; then
+      pkg_install_linux "${missing[@]}"
+    elif [ "$PLATFORM" = "macos" ]; then
+      pkg_install_macos "${missing[@]}"
+    else
+      echo "[!] Unsupported platform for automatic dependency install. Please install: ${missing[*]}"
+    fi
+  fi
+}
+ensure_core_deps
 
 # Install Oh My Zsh if missing
 if [ ! -d "$HOME/.oh-my-zsh" ]; then
@@ -74,29 +103,55 @@ cp "$SCRIPT_DIR/themes/jd-minimal.zsh-theme" "$THEME_DIR/"
 
 # Font detection + optional installation
 has_nerd_font() {
-  command -v fc-list >/dev/null 2>&1 && fc-list | grep -qi "Nerd Font"
+  if [ "$PLATFORM" = "linux" ]; then
+    command -v fc-list >/dev/null 2>&1 && fc-list | grep -qi "Nerd Font"
+  elif [ "$PLATFORM" = "macos" ]; then
+    # crude check - list user fonts
+    ls "$HOME/Library/Fonts" 2>/dev/null | grep -qi "Nerd" || ls "$HOME/Library/Fonts/NerdFonts" 2>/dev/null | grep -qi "JetBrainsMono"
+  else
+    return 1
+  fi
+}
+
+install_nerd_font() {
+  local font_zip_url="https://github.com/ryanoasis/nerd-fonts/releases/download/v3.2.1/JetBrainsMono.zip"
+  local tmpd ; tmpd="$(mktemp -d)"
+  echo "[*] Downloading JetBrainsMono Nerd Font..."
+  (cd "$tmpd" && curl -fL -o JetBrainsMono.zip "$font_zip_url")
+  if [ "$PLATFORM" = "linux" ]; then
+    local dest="$HOME/.local/share/fonts/NerdFonts/JetBrainsMono"
+    mkdir -p "$dest"
+    unzip -o "$tmpd/JetBrainsMono.zip" -d "$dest" >/dev/null
+    if command -v fc-cache >/dev/null 2>&1; then
+      fc-cache -f "$HOME/.local/share/fonts" || true
+    fi
+    echo "[*] Installed Nerd Font to $dest"
+  elif [ "$PLATFORM" = "macos" ]; then
+    local dest="$HOME/Library/Fonts/NerdFonts/JetBrainsMono"
+    mkdir -p "$dest"
+    unzip -o "$tmpd/JetBrainsMono.zip" -d "$dest" >/dev/null
+    echo "[*] Installed Nerd Font to $dest"
+    echo "[i] Set this font in your terminal profile to see glyphs."
+  else
+    echo "[!] Font install for platform '$PLATFORM' is not implemented."
+  fi
+  rm -rf "$tmpd"
 }
 
 if [ "$NO_FONT" -eq 0 ]; then
   if has_nerd_font; then
     echo "[*] Nerd Font detected."
   else
-    echo "[*] No Nerd Font detected. Installing JetBrainsMono Nerd Font for current user..."
+    echo "[*] No Nerd Font detected."
+    # unzip may be missing
     if ! command -v unzip >/dev/null 2>&1; then
-      pkg_install unzip
+      if [ "$PLATFORM" = "linux" ]; then
+        pkg_install_linux unzip
+      elif [ "$PLATFORM" = "macos" ]; then
+        pkg_install_macos unzip
+      fi
     fi
-    TMPD="$(mktemp -d)"
-    pushd "$TMPD" >/dev/null
-    ZIP_URL="https://github.com/ryanoasis/nerd-fonts/releases/download/v3.2.1/JetBrainsMono.zip"
-    curl -fL -o JetBrainsMono.zip "$ZIP_URL"
-    mkdir -p "$HOME/.local/share/fonts/NerdFonts/JetBrainsMono"
-    unzip -o JetBrainsMono.zip -d "$HOME/.local/share/fonts/NerdFonts/JetBrainsMono" >/dev/null
-    popd >/dev/null
-    rm -rf "$TMPD"
-    if command -v fc-cache >/dev/null 2>&1; then
-      fc-cache -f "$HOME/.local/share/fonts" || true
-    fi
-    echo "[*] JetBrainsMono Nerd Font installed. Set it in your terminal profile if you want glyphs."
+    install_nerd_font
   fi
 else
   echo "[*] Skipping Nerd Font detection and install (--no-font or JD_INSTALL_FONT=0)."
@@ -113,14 +168,14 @@ fi
 
 # Set theme
 if grep -q '^ZSH_THEME=' "$ZSHRC"; then
-  sed -i 's|^ZSH_THEME=.*|ZSH_THEME="jd-minimal/jd-minimal"|' "$ZSHRC"
+  sed -i.bak 's|^ZSH_THEME=.*|ZSH_THEME="jd-minimal/jd-minimal"|' "$ZSHRC"
 else
   echo 'ZSH_THEME="jd-minimal/jd-minimal"' >> "$ZSHRC"
 fi
 
 # Ensure plugins line
 if grep -q '^plugins=' "$ZSHRC"; then
-  sed -i 's|^plugins=.*|plugins=(git zsh-autosuggestions zsh-syntax-highlighting)|' "$ZSHRC"
+  sed -i.bak 's|^plugins=.*|plugins=(git zsh-autosuggestions zsh-syntax-highlighting)|' "$ZSHRC"
 else
   echo 'plugins=(git zsh-autosuggestions zsh-syntax-highlighting)' >> "$ZSHRC"
 fi
@@ -132,11 +187,12 @@ fi
 
 # Add or update jd-minimal config block (idempotent)
 if grep -q '# jd-minimal options' "$ZSHRC"; then
-  sed -i "s|^export JD_SYMBOL=.*|export JD_SYMBOL=\"${JD_SYMBOL}\"|" "$ZSHRC" || true
-  sed -i "s|^export JD_PATH_MODE=.*|export JD_PATH_MODE=\"${JD_PATH_MODE}\"|" "$ZSHRC" || true
-  sed -i "s|^export JD_COLORS_USER=.*|export JD_COLORS_USER=\"${JD_COLORS_USER}\"|" "$ZSHRC" || true
-  sed -i "s|^export JD_COLORS_HOST=.*|export JD_COLORS_HOST=\"${JD_COLORS_HOST}\"|" "$ZSHRC" || true
-  sed -i "s|^export JD_COLORS_PATH=.*|export JD_COLORS_PATH=\"${JD_COLORS_PATH}\"|" "$ZSHRC" || true
+  # update existing keys in place
+  sed -i.bak "s|^export JD_SYMBOL=.*|export JD_SYMBOL=\"${JD_SYMBOL}\"|" "$ZSHRC" || true
+  sed -i.bak "s|^export JD_PATH_MODE=.*|export JD_PATH_MODE=\"${JD_PATH_MODE}\"|" "$ZSHRC" || true
+  sed -i.bak "s|^export JD_COLORS_USER=.*|export JD_COLORS_USER=\"${JD_COLORS_USER}\"|" "$ZSHRC" || true
+  sed -i.bak "s|^export JD_COLORS_HOST=.*|export JD_COLORS_HOST=\"${JD_COLORS_HOST}\"|" "$ZSHRC" || true
+  sed -i.bak "s|^export JD_COLORS_PATH=.*|export JD_COLORS_PATH=\"${JD_COLORS_PATH}\"|" "$ZSHRC" || true
 else
   cat >> "$ZSHRC" <<EOF
 
@@ -150,4 +206,5 @@ EOF
 fi
 
 echo
-echo "[*] Done. Open a new terminal or run: exec zsh"
+echo "[*] Done. Open a new terminal or run: exec zsh
+"
